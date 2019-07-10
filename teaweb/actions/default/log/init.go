@@ -6,21 +6,18 @@ import (
 	"github.com/iwind/TeaGo"
 )
 
+// 初始化
 func init() {
 	TeaGo.BeforeStart(func(server *TeaGo.Server) {
+		// 路由设置
 		server.
-			EndAll().
 			Helper(&helpers.UserMustAuth{
 				Grant: configs.AdminGrantLog,
 			}).
 			Helper(new(Helper)).
 			Prefix("/log").
-			Get("", new(IndexAction)).
-			Get("/get", new(GetAction)).
-			Get("/responseHeader/:logId", new(ResponseHeaderAction)).
-			Get("/requestHeader/:logId", new(RequestHeaderAction)).
-			Get("/cookies/:logId", new(CookiesAction)).
 			GetPost("/runtime", new(RuntimeAction)).
+			GetPost("/audit", new(AuditAction)).
 			EndAll()
 	})
 }

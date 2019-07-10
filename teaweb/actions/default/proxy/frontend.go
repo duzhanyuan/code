@@ -7,18 +7,18 @@ import (
 
 type FrontendAction actions.Action
 
+// 前端设置
 func (this *FrontendAction) Run(params struct {
-	Filename string
+	ServerId string
 }) {
 	this.Data["selectedTab"] = "frontend"
-	this.Data["filename"] = params.Filename
 
-	server, err := teaconfigs.NewServerConfigFromFile(params.Filename)
-	if err != nil {
-		this.Fail(err.Error())
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
 	}
 
-	this.Data["proxy"] = server
+	this.Data["server"] = server
 
 	this.Show()
 }

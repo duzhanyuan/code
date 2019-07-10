@@ -3,11 +3,13 @@ package teaplugins
 import (
 	"bufio"
 	"bytes"
+	"github.com/TeaWeb/plugin/messages"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/files"
 	"github.com/iwind/TeaGo/logs"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"sync"
 )
 
@@ -27,66 +29,6 @@ func Register(plugin *Plugin) {
 
 func Plugins() []*Plugin {
 	return plugins
-}
-
-func TopBarWidgets() []*Widget {
-	pluginsLocker.Lock()
-	defer pluginsLocker.Unlock()
-
-	result := []*Widget{}
-	for _, p := range plugins {
-		for _, widget := range p.Widgets {
-			if widget.TopBar {
-				result = append(result, widget)
-			}
-		}
-	}
-	return result
-}
-
-func MenuBarWidgets() []*Widget {
-	pluginsLocker.Lock()
-	defer pluginsLocker.Unlock()
-
-	result := []*Widget{}
-	for _, p := range plugins {
-		for _, widget := range p.Widgets {
-			if widget.MenuBar {
-				result = append(result, widget)
-			}
-		}
-	}
-	return result
-}
-
-func HelperBarWidgets() []*Widget {
-	pluginsLocker.Lock()
-	defer pluginsLocker.Unlock()
-
-	result := []*Widget{}
-	for _, p := range plugins {
-		for _, widget := range p.Widgets {
-			if widget.HelperBar {
-				result = append(result, widget)
-			}
-		}
-	}
-	return result
-}
-
-func DashboardWidgets(group WidgetGroup) []*Widget {
-	pluginsLocker.Lock()
-	defer pluginsLocker.Unlock()
-
-	result := []*Widget{}
-	for _, p := range plugins {
-		for _, widget := range p.Widgets {
-			if widget.Dashboard && widget.Group == group {
-				result = append(result, widget)
-			}
-		}
-	}
-	return result
 }
 
 func FilterRequest(request *http.Request) (resultReq *http.Request, willContinue bool) {
@@ -157,15 +99,34 @@ func FilterResponse(response *http.Response) (resultResp *http.Response) {
 	return resultResp
 }
 
+// 刷新所有插件的App
+func ReloadAllApps() {
+	for _, loader := range loaders {
+		message := new(messages.ReloadAppsAction)
+		loader.Write(message)
+	}
+}
+
+// 加载插件
+var loaders = []*Loader{}
+
 func load() {
 	logs.Println("[plugin]load plugins")
 	dir := Tea.Root + Tea.DS + "plugins"
 	files.NewFile(dir).Range(func(file *files.File) {
-		if file.Ext() != ".tea" {
+		if !strings.HasSuffix(file.Name(), ".tea") && !strings.HasSuffix(file.Name(), ".tea.exe") {
 			return
 		}
 
 		logs.Println("[plugin][loader]load plugin '" + file.Name() + "'")
-		go NewLoader(file.Path()).Load()
+
+		loader := NewLoader(file.Path())
+		go func() {
+			err := loader.Load()
+			if err != nil {
+				logs.Println("[plugin][" + file.Name() + "]failed:" + err.Error())
+			}
+		}()
+		loaders = append(loaders, loader)
 	})
 }

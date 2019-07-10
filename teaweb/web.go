@@ -1,50 +1,72 @@
 package teaweb
 
 import (
-	"fmt"
-	"github.com/TeaWeb/code/teaconst"
+	"compress/gzip"
+	_ "github.com/TeaWeb/code/teacache"
+	_ "github.com/TeaWeb/code/teacluster"
 	"github.com/TeaWeb/code/teaproxy"
-	_ "github.com/TeaWeb/code/teaweb/actions/default/apps"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/apps"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/board"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/cluster"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/groups"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/notices"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/agents/settings"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/api/agent"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/api/monitor"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/cache"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/dashboard"
 	"github.com/TeaWeb/code/teaweb/actions/default/index"
-	"github.com/TeaWeb/code/teaweb/actions/default/install"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/log"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/login"
 	"github.com/TeaWeb/code/teaweb/actions/default/logout"
-	_ "github.com/TeaWeb/code/teaweb/actions/default/monitor"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/mongo"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/notices"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/plugins"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/backend"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/board"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/cache"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/fastcgi"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/groups"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/headers"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/locations"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/locations/access"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/locations/backends"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/locations/websocket"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/log"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/rewrite"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/servers"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/ssl"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/stat"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/tunnel"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/proxy/waf"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/settings"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/backup"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/cluster"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/login"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/mongo"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/profile"
 	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/server"
-	_ "github.com/TeaWeb/code/teaweb/actions/default/stat"
-	"github.com/TeaWeb/code/teaweb/helpers"
+	_ "github.com/TeaWeb/code/teaweb/actions/default/settings/update"
 	"github.com/TeaWeb/code/teaweb/utils"
 	"github.com/iwind/TeaGo"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/files"
-	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/logs"
 	"github.com/iwind/TeaGo/sessions"
-	"github.com/iwind/TeaGo/types"
-	"os"
-	"os/exec"
-	"runtime"
-	"strings"
-	"syscall"
+	"net/http"
 	"time"
 )
 
+// 启动
+var server *TeaGo.Server
+
 func Start() {
-	if lookupArgs() {
+	// 命令行
+	shell := &WebShell{}
+	shell.Start()
+	if shell.ShouldStop {
 		return
 	}
 
@@ -58,7 +80,8 @@ func Start() {
 		time.Sleep(1 * time.Second)
 
 		// 启动代理
-		teaproxy.Start()
+		teaproxy.SharedManager.Start()
+		teaproxy.SharedManager.Wait()
 	}()
 
 	// 启动测试服务器
@@ -71,144 +94,52 @@ func Start() {
 	}
 
 	// 启动管理界面
-	TeaGo.NewServer().
+	server = TeaGo.NewServer(false).
 		AccessLog(false).
 
 		Get("/", new(index.IndexAction)).
 		Get("/logout", new(logout.IndexAction)).
+		Get("/css/semantic.min.css", func(req *http.Request, writer http.ResponseWriter) {
+			compressResource(writer, Tea.PublicDir()+"/css/semantic.min.css", "text/css; charset=utf-8")
+		}).
+		Get("/js/echarts.min.js", func(req *http.Request, writer http.ResponseWriter) {
+			compressResource(writer, Tea.PublicDir()+"/js/echarts.min.js", "text/javascript; charset=utf-8")
+		}).
+		Get("/js/vue.min.js", func(req *http.Request, writer http.ResponseWriter) {
+			compressResource(writer, Tea.PublicDir()+"/js/vue.min.js", "text/javascript; charset=utf-8")
+		}).
 
-		Helper(new(helpers.UserMustAuth)).
-		GetPost("/install/mongo", new(install.MongoAction)).
 		EndAll().
 
 		Session(sessions.NewFileSessionManager(
 			86400,
 			"gSeDQJJ67tAVdnguDAQdGmnDVrjFd2I9",
-		)).
-
-		Start()
+		))
+	server.Start()
 }
 
-func lookupArgs() bool {
-	if len(os.Args) == 1 {
-		return false
-	}
-	args := os.Args[1:]
-	if lists.ContainsAny(args, "?", "help", "-help", "h", "-h") {
-		fmt.Println("TeaWeb v" + teaconst.TeaVersion)
-		fmt.Println("Usage:", "\n   ./bin/teaweb [option]")
-		fmt.Println("")
-		fmt.Println("Options:")
-		fmt.Println("  -h", "\n     print this help")
-		fmt.Println("  -v", "\n     print version")
-		fmt.Println("  start", "\n     start the server")
-		fmt.Println("  stop", "\n     stop the server")
-		fmt.Println("  restart", "\n     restart the server")
-		return true
-	} else if lists.Contains(args, "-v") {
-		fmt.Println("TeaWeb v"+teaconst.TeaVersion, "(build: "+runtime.Version(), runtime.GOOS, runtime.GOARCH+")")
-		return true
-	} else if lists.Contains(args, "start") {
-		proc := checkPid()
-		if proc != nil {
-			fmt.Println("[teaweb]already started, pid:", proc.Pid)
-			return true
-		}
-
-		cmd := exec.Command(os.Args[0])
-		err := cmd.Start()
-		if err != nil {
-			fmt.Println("[teaweb]start failed:", err.Error())
-			return true
-		}
-		fmt.Println("[teaweb]started ok, pid:", cmd.Process.Pid)
-
-		return true
-	} else if lists.Contains(args, "stop") {
-		proc := checkPid()
-		if proc == nil {
-			fmt.Println("[teaweb]not started")
-			return true
-		}
-
-		err := proc.Kill()
-		if err != nil {
-			fmt.Println("[teaweb]stop error:", err.Error())
-			return true
-		}
-
-		files.NewFile(Tea.Root + "/bin/pid").Delete()
-		fmt.Println("[teaweb]stopped ok, pid:", proc.Pid)
-
-		return true
-	} else if lists.Contains(args, "restart") {
-		proc := checkPid()
-		if proc != nil {
-			err := proc.Kill()
-			if err != nil {
-				fmt.Println("[teaweb]stop error:", err.Error())
-				return true
-			}
-		}
-
-		cmd := exec.Command(os.Args[0])
-		err := cmd.Start()
-		if err != nil {
-			fmt.Println("[teaweb]restart failed:", err.Error())
-			return true
-		}
-		fmt.Println("[teaweb]restarted ok, pid:", cmd.Process.Pid)
-
-		return true
-	}
-
-	if len(args) > 0 {
-		fmt.Println("[teaweb]unknown command option '" + strings.Join(args, " ") + "', run './bin/teaweb -h' to see the usage.")
-		return true
-	}
-	return false
-}
-
-func checkPid() *os.Process {
-	// check pid file
-	pidFile := files.NewFile(Tea.Root + "/bin/pid")
-	if !pidFile.Exists() {
-		return nil
-	}
-	pidString, err := pidFile.ReadAllString()
+// 压缩Javascript、CSS等静态资源
+func compressResource(writer http.ResponseWriter, path string, mimeType string) {
+	cssFile := files.NewFile(path)
+	data, err := cssFile.ReadAll()
 	if err != nil {
-		return nil
-	}
-	pid := types.Int(pidString)
-	proc, err := os.FindProcess(pid)
-	if err != nil || proc == nil {
-		return nil
+		return
 	}
 
-	err = proc.Signal(syscall.Signal(0))
+	gzipWriter, err := gzip.NewWriterLevel(writer, gzip.BestSpeed)
 	if err != nil {
-		return nil
+		writer.Write(data)
+		return
 	}
+	defer gzipWriter.Close()
 
-	// ps?
-	ps, err := exec.LookPath("ps")
-	if err != nil {
-		return proc
-	}
+	header := writer.Header()
+	header.Set("Content-Encoding", "gzip")
+	header.Set("Transfer-Encoding", "chunked")
+	header.Set("Vary", "Accept-Encoding")
+	header.Set("Accept-encoding", "gzip, deflate, br")
+	header.Set("Content-Type", mimeType)
+	header.Set("Last-Modified", "Sat, 02 Mar 2015 09:31:16 GMT")
 
-	cmd := exec.Command(ps, "-p", pidString, "-o", "command=")
-	output, err := cmd.Output()
-	if err != nil {
-		return proc
-	}
-
-	if len(output) == 0 {
-		return nil
-	}
-
-	if strings.Contains(string(output), "teaweb") {
-		return proc
-	}
-
-	return nil
+	gzipWriter.Write(data)
 }

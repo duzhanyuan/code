@@ -1,10 +1,10 @@
 package backend
 
 import (
-	"github.com/TeaWeb/code/teaweb/configs"
-	"github.com/iwind/TeaGo"
-	"github.com/TeaWeb/code/teaweb/helpers"
 	"github.com/TeaWeb/code/teaweb/actions/default/proxy"
+	"github.com/TeaWeb/code/teaweb/configs"
+	"github.com/TeaWeb/code/teaweb/helpers"
+	"github.com/iwind/TeaGo"
 )
 
 func init() {
@@ -17,10 +17,13 @@ func init() {
 			Module("").
 			Prefix("/proxy/backend").
 			Get("", new(IndexAction)).
-			Post("/add", new(AddAction)).
-			Post("/update", new(UpdateAction)).
+			Get("/data", new(DataAction)).
+			GetPost("/add", new(AddAction)).
+			GetPost("/update", new(UpdateAction)).
 			Post("/delete", new(DeleteAction)).
-			Prefix("").
+			GetPost("/scheduling", new(SchedulingAction)).
+			Post("/online", new(OnlineAction)).
+			Post("/clearFails", new(ClearFailsAction)).
 			EndAll()
 	})
 }

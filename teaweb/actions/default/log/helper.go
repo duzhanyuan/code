@@ -1,8 +1,8 @@
 package log
 
 import (
+	"github.com/TeaWeb/code/teaweb/utils"
 	"github.com/iwind/TeaGo/actions"
-	"github.com/iwind/TeaGo/maps"
 	"net/http"
 )
 
@@ -14,19 +14,10 @@ func (this *Helper) BeforeAction(action *actions.ActionObject) {
 		return
 	}
 
-	action.Data["teaMenu"] = "log"
-	action.Data["teaTabbar"] = []maps.Map{
-		{
-			"name":    "访问日志",
-			"subName": "",
-			"url":     "/log",
-			"active":  action.Spec.HasClassPrefix("log.IndexAction"),
-		},
-		{
-			"name":    "TeaWeb日志",
-			"subName": "",
-			"url":     "/log/runtime",
-			"active":  action.Spec.ClassName == "log.RuntimeAction",
-		},
-	}
+	tabbar := utils.NewTabbar()
+	tabbar.Add("系统日志", "", "/log/runtime", "", action.HasPrefix("/log/runtime"))
+	tabbar.Add("操作日志", "", "/log/audit", "", action.HasPrefix("/log/audit"))
+
+	action.Data["teaTabbar"] = tabbar.Items()
+	action.Data["teaMenu"] = "log.runtime"
 }

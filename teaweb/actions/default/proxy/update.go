@@ -1,132 +1,121 @@
 package proxy
 
 import (
-	"github.com/TeaWeb/code/teaweb/helpers"
-	"github.com/iwind/TeaGo/Tea"
-	"github.com/iwind/TeaGo/files"
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/iwind/TeaGo/logs"
+	"github.com/TeaWeb/code/teautils"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
 	"github.com/iwind/TeaGo/actions"
-	"strings"
-	"fmt"
-	"github.com/TeaWeb/code/teaweb/actions/default/proxy/global"
+	"strconv"
 )
 
 type UpdateAction actions.Action
 
+// 修改代理服务信息
 func (this *UpdateAction) Run(params struct {
-	Filename string
+	ServerId string
 }) {
-	if len(params.Filename) == 0 {
-		this.Fail("配置文件读取失败")
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
 	}
+	this.Data["server"] = server
+	this.Data["selectedTab"] = "basic"
 
-	reader, err := files.NewReader(Tea.ConfigFile(params.Filename))
-	if err != nil {
-		this.Fail("配置文件读取失败")
-	}
+	this.Data["usualCharsets"] = teautils.UsualCharsets
+	this.Data["charsets"] = teautils.AllCharsets
 
-	config := &teaconfigs.ServerConfig{}
-	err = reader.ReadYAML(config)
-	if err != nil {
-		logs.Error(err)
-		this.Fail("配置文件读取失败")
-	}
-
-	this.Data["filename"] = params.Filename
-	this.Data["server"] = config
+	this.Data["accessLogs"] = proxyutils.FormatAccessLog(server.AccessLog)
 
 	this.Show()
 }
 
+// 保存提交
 func (this *UpdateAction) RunPost(params struct {
-	Auth           *helpers.UserMustAuth
-	Filename       string
-	Name           []string
-	ListenAddress  []string
-	ListenPort     []int
-	BackendAddress []string
-	BackendPort    []int
-	Must           *actions.Must
+	HttpOn      bool
+	ServerId    string
+	Description string
+	Name        []string
+	Listen      []string
+	Root        string
+	Charset     string
+	Index       []string
+	MaxBodySize float64
+	MaxBodyUnit string
+
+	EnableStat    bool
+	GzipLevel     uint8
+	GzipMinLength float64
+	GzipMinUnit   string
+	CacheStatic   bool
+
+	PageStatus []string
+	PageURL    []string
+
+	ShutdownPageOn bool
+	ShutdownPage   string
+
+	RedirectToHttps bool
+
+	Must *actions.Must
 }) {
-	if len(params.Filename) == 0 {
-		this.Fail("配置文件名错误")
-	}
-	configFile := files.NewFile(Tea.ConfigFile(params.Filename))
-	if !configFile.IsFile() {
-		this.Fail("找不到要修改的配置")
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
 	}
 
-	if len(params.Name) == 0 {
-		this.Fail("域名不能为空")
-	}
+	params.Must.
+		Field("description", params.Description).
+		Require("代理服务名称不能为空")
 
-	for index, name := range params.Name {
-		name = strings.TrimSpace(name)
-		if len(name) == 0 {
-			this.Fail("域名不能为空")
+	server.Http = params.HttpOn
+	server.Description = params.Description
+	server.Name = params.Name
+	server.Listen = params.Listen
+	server.Root = params.Root
+	server.Charset = params.Charset
+	server.Index = params.Index
+	server.MaxBodySize = strconv.FormatFloat(params.MaxBodySize, 'f', -1, 64) + params.MaxBodyUnit
+
+	// 访问日志
+	server.AccessLog = proxyutils.ParseAccessLogForm(this.Request)
+
+	server.DisableStat = !params.EnableStat
+	if params.GzipLevel <= 9 {
+		server.GzipLevel = params.GzipLevel
+	}
+	server.GzipMinLength = strconv.FormatFloat(params.GzipMinLength, 'f', -1, 64) + params.GzipMinUnit
+	server.CacheStatic = params.CacheStatic
+
+	server.Pages = []*teaconfigs.PageConfig{}
+	for index, status := range params.PageStatus {
+		if index < len(params.PageURL) {
+			page := teaconfigs.NewPageConfig()
+			page.Status = []string{status}
+			page.URL = params.PageURL[index]
+			server.AddPage(page)
 		}
-		params.Name[index] = name
 	}
 
-	for index, address := range params.ListenAddress {
-		address = strings.TrimSpace(address)
-		if len(address) == 0 {
-			this.Fail("访问地址不能为空")
-		}
-		params.ListenAddress[index] = address
+	server.ShutdownPageOn = params.ShutdownPageOn
+	if server.ShutdownPageOn && len(params.ShutdownPage) == 0 {
+		this.FailField("shutdownPage", "请输入临时关闭页面文件路径")
 	}
+	server.ShutdownPage = params.ShutdownPage
 
-	for index, port := range params.ListenPort {
-		if port <= 0 || port >= 65535 {
-			this.Fail("访问地址端口错误")
-		}
-		params.ListenPort[index] = port
-	}
+	server.RedirectToHttps = params.RedirectToHttps
 
-	for index, address := range params.BackendAddress {
-		address = strings.TrimSpace(address)
-		if len(address) == 0 {
-			this.Fail("后端地址不能为空")
-		}
-		params.BackendAddress[index] = address
-	}
-
-	for index, port := range params.BackendPort {
-		if port <= 0 || port >= 65535 {
-			this.Fail("后端地址端口错误")
-		}
-		params.BackendPort[index] = port
-	}
-
-	// 保存
-	server := teaconfigs.NewServerConfig()
-	server.AddName(params.Name ...)
-	for index, address := range params.ListenAddress {
-		if index > len(params.ListenPort)-1 {
-			continue
-		}
-
-		server.AddListen(fmt.Sprintf("%s:%d", address, params.ListenPort[index]))
-	}
-	for index, address := range params.BackendAddress {
-		if index > len(params.BackendPort)-1 {
-			continue
-		}
-
-		backend := &teaconfigs.ServerBackendConfig{
-			Address: fmt.Sprintf("%s:%d", address, params.BackendPort[index]),
-		}
-		server.AddBackend(backend)
-	}
-
-	err := server.WriteToFile(configFile.Path())
+	err := server.Validate()
 	if err != nil {
-		this.Fail("配置文件写入失败")
+		this.Fail("校验失败：" + err.Error())
+	}
+
+	err = server.Save()
+	if err != nil {
+		this.Fail("保存失败：" + err.Error())
 	}
 
 	// 重启
-	global.NotifyChange()
+	proxyutils.NotifyChange()
 
-	this.Next("/proxy", nil, "").Success("服务保存成功")
+	this.Success()
 }

@@ -2,25 +2,38 @@ package headers
 
 import (
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/TeaWeb/code/teaweb/actions/default/proxy/global"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
 	"github.com/iwind/TeaGo/actions"
 )
 
 type DeleteAction actions.Action
 
+// 删除Header
 func (this *DeleteAction) Run(params struct {
-	Filename string
-	Index    int
+	ServerId   string
+	LocationId string
+	RewriteId  string
+	FastcgiId  string
+	BackendId  string
+	HeaderId   string
 }) {
-	proxy, err := teaconfigs.NewServerConfigFromFile(params.Filename)
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
+	}
+
+	headerList, err := server.FindHeaderList(params.LocationId, params.BackendId, params.RewriteId, params.FastcgiId)
 	if err != nil {
 		this.Fail(err.Error())
 	}
+	headerList.RemoveResponseHeader(params.HeaderId)
 
-	proxy.DeleteHeaderAtIndex(params.Index)
-	proxy.Save()
+	err = server.Save()
+	if err != nil {
+		this.Fail("保存失败：" + err.Error())
+	}
 
-	global.NotifyChange()
+	proxyutils.NotifyChange()
 
 	this.Success()
 }

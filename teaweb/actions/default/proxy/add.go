@@ -2,11 +2,9 @@ package proxy
 
 import (
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/TeaWeb/code/teaweb/actions/default/proxy/global"
-	"github.com/iwind/TeaGo/Tea"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
 	"github.com/iwind/TeaGo/actions"
-	"github.com/iwind/TeaGo/utils/string"
-	"regexp"
+	"github.com/iwind/TeaGo/logs"
 	"strings"
 )
 
@@ -18,12 +16,13 @@ func (this *AddAction) Run(params struct {
 	this.Show()
 }
 
+// 提交保存
 func (this *AddAction) RunPost(params struct {
 	Description string
-	ServiceType uint
-	Name        string
-	Listen      string
-	Backend     string
+	ServerType  string
+	Names       []string
+	Listens     []string
+	Backends    []string
 	Root        string
 	Must        *actions.Must
 }) {
@@ -36,9 +35,10 @@ func (this *AddAction) RunPost(params struct {
 	server.Description = params.Description
 	server.Charset = "utf-8"
 	server.Index = []string{"index.html", "index.htm", "index.php"}
+	server.CacheOn = true
 
-	if len(params.Name) > 0 {
-		for _, name := range regexp.MustCompile("\\s+").Split(params.Name, -1) {
+	if len(params.Names) > 0 {
+		for _, name := range params.Names {
 			name = strings.TrimSpace(name)
 			if len(name) > 0 {
 				server.AddName(name)
@@ -46,8 +46,8 @@ func (this *AddAction) RunPost(params struct {
 		}
 	}
 
-	if len(params.Listen) > 0 {
-		for _, listen := range regexp.MustCompile("\\s+").Split(params.Listen, -1) {
+	if len(params.Listens) > 0 {
+		for _, listen := range params.Listens {
 			listen = strings.TrimSpace(listen)
 			if len(listen) > 0 {
 				server.AddListen(listen)
@@ -55,16 +55,27 @@ func (this *AddAction) RunPost(params struct {
 		}
 	}
 
-	if params.ServiceType == 1 { // 代理服务
-		for _, backend := range regexp.MustCompile("\\s+").Split(params.Backend, -1) {
+	if params.ServerType == "proxy" { // 代理服务
+		for _, backend := range params.Backends {
 			backend = strings.TrimSpace(backend)
 			if len(backend) > 0 {
-				backendObject := teaconfigs.NewServerBackendConfig()
+				backendObject := teaconfigs.NewBackendConfig()
+				if strings.HasPrefix(backend, "http://") {
+					backend = strings.TrimPrefix(backend, "http://")
+					backendObject.Scheme = "http"
+				} else if strings.HasPrefix(backend, "https://") {
+					backend = strings.TrimPrefix(backend, "https://")
+					backendObject.Scheme = "https"
+				} else {
+					backendObject.Scheme = "http"
+				}
+
 				backendObject.Address = backend
+				backendObject.Weight = 10
 				server.AddBackend(backendObject)
 			}
 		}
-	} else if params.ServiceType == 2 { // 普通服务
+	} else if params.ServerType == "static" { // 普通服务
 		server.Root = params.Root
 	}
 
@@ -73,16 +84,28 @@ func (this *AddAction) RunPost(params struct {
 		this.Fail("添加时有问题发生：" + err.Error())
 	}
 
-	filename := "server." + stringutil.Rand(16) + ".proxy.conf"
-	configPath := Tea.ConfigFile(filename)
-	err = server.WriteToFile(configPath)
+	filename := "server." + server.Id + ".proxy.conf"
+	server.Filename = filename
+	err = server.Save()
 	if err != nil {
 		this.Fail(err.Error())
 	}
 
-	global.NotifyChange()
+	// 保存到server list
+	serverList, err := teaconfigs.SharedServerList()
+	if err != nil {
+		logs.Error(err)
+	} else {
+		serverList.AddServer(server.Filename)
+		err = serverList.Save()
+		if err != nil {
+			logs.Error(err)
+		}
+	}
+
+	proxyutils.NotifyChange()
 
 	this.Next("/proxy/detail", map[string]interface{}{
-		"filename": filename,
+		"serverId": server.Id,
 	}, "").Success("添加成功，现在去查看详细信息")
 }

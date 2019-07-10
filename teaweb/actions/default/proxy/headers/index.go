@@ -3,30 +3,26 @@ package headers
 import (
 	"github.com/TeaWeb/code/teaconfigs"
 	"github.com/iwind/TeaGo/actions"
-	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/maps"
 )
 
 type IndexAction actions.Action
 
+// 自定义Http Header
 func (this *IndexAction) Run(params struct {
-	Filename string
+	ServerId string // 必填
 }) {
-	proxy, err := teaconfigs.NewServerConfigFromFile(params.Filename)
-	if err != nil {
-		this.Fail(err.Error())
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
 	}
 
 	this.Data["selectedTab"] = "header"
-	this.Data["filename"] = params.Filename
-	this.Data["proxy"] = proxy
+	this.Data["server"] = server
 
-	// headers
-	this.Data["headers"] = proxy.Headers
-	this.Data["ignoreHeaders"] = lists.NewList(proxy.IgnoreHeaders).Map(func(k int, v interface{}) interface{} {
-		return map[string]interface{}{
-			"name": v,
-		}
-	}).Slice
+	this.Data["headerQuery"] = maps.Map{
+		"serverId": params.ServerId,
+	}
 
 	this.Show()
 }

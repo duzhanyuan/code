@@ -2,31 +2,31 @@ package proxy
 
 import (
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/TeaWeb/code/teautils"
+	"github.com/TeaWeb/code/teaproxy"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
 	"github.com/iwind/TeaGo/actions"
 )
 
 type DetailAction actions.Action
 
+// 代理详情
 func (this *DetailAction) Run(params struct {
-	Filename string
+	ServerId string
 }) {
-	proxy, err := teaconfigs.NewServerConfigFromFile(params.Filename)
-	if err != nil {
-		this.Fail(err.Error())
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
 	}
 
-	if proxy.Index == nil {
-		proxy.Index = []string{}
+	if server.Index == nil {
+		server.Index = []string{}
 	}
 
 	this.Data["selectedTab"] = "basic"
-	this.Data["filename"] = params.Filename
-	this.Data["proxy"] = proxy
+	this.Data["server"] = server
 
-	// 字符集
-	this.Data["usualCharsets"] = teautils.UsualCharsets
-	this.Data["charsets"] = teautils.AllCharsets
+	this.Data["errs"] = teaproxy.SharedManager.FindServerErrors(params.ServerId)
+	this.Data["accessLogs"] = proxyutils.FormatAccessLog(server.AccessLog)
 
 	this.Show()
 }

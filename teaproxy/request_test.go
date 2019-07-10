@@ -2,11 +2,14 @@ package teaproxy
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/TeaWeb/code/teaconfigs"
+	"github.com/TeaWeb/code/teaconfigs/shared"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/assert"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -18,10 +21,10 @@ type testResponseWriter struct {
 	data []byte
 }
 
-func testNewResponseWriter(a *assert.Assertion) *testResponseWriter {
-	return &testResponseWriter{
+func testNewResponseWriter(a *assert.Assertion) *ResponseWriter {
+	return NewResponseWriter(&testResponseWriter{
 		a: a,
-	}
+	})
 }
 
 func (this *testResponseWriter) Header() http.Header {
@@ -45,7 +48,7 @@ func TestRequest_Call(t *testing.T) {
 	writer := testNewResponseWriter(a)
 
 	request := NewRequest(nil)
-	err := request.Call(writer)
+	err := request.call(writer)
 	a.IsNotNil(err)
 	if err != nil {
 		a.Log(err.Error())
@@ -59,12 +62,12 @@ func TestRequest_CallRoot(t *testing.T) {
 	request := NewRequest(nil)
 	request.root = Tea.ViewsDir() + "/@default"
 	request.uri = "/layout.css"
-	err := request.Call(writer)
+	err := request.call(writer)
 	a.IsNil(err)
-	writer.Close()
 
-	a.Log("requestTime:", request.requestTime)
-	a.Log("bytes send:", request.responseBytesSent, request.responseBodyBytesSent)
+	a.Log("status:", writer.StatusCode())
+	a.Log("requestTime:", request.requestCost)
+	a.Log("bytes send:", writer.SentBodyBytes())
 }
 
 func TestRequest_CallBackend(t *testing.T) {
@@ -79,17 +82,16 @@ func TestRequest_CallBackend(t *testing.T) {
 	request := NewRequest(req)
 	request.scheme = "http"
 	request.host = "wx.balefm.cn"
-	request.backend = &teaconfigs.ServerBackendConfig{
+	request.backend = &teaconfigs.BackendConfig{
 		Address: "127.0.0.1",
 	}
 	request.backend.Validate()
-	err = request.Call(writer)
+	err = request.call(writer)
 	a.IsNil(err)
-	writer.Close()
 
-	a.Log("status:", request.responseStatus, request.responseStatusMessage)
-	a.Log("requestTime:", request.requestTime)
-	a.Log("bytes send:", request.responseBytesSent, request.responseBodyBytesSent)
+	a.Log("status:", writer.StatusCode())
+	a.Log("requestTime:", request.requestCost)
+	a.Log("bytes send:", writer.SentBodyBytes())
 }
 
 func TestRequest_CallProxy(t *testing.T) {
@@ -106,7 +108,7 @@ func TestRequest_CallProxy(t *testing.T) {
 	request.host = "wx.balefm.cn"
 
 	proxy := teaconfigs.NewServerConfig()
-	proxy.AddBackend(&teaconfigs.ServerBackendConfig{
+	proxy.AddBackend(&teaconfigs.BackendConfig{
 		Address: "127.0.0.1:80",
 	})
 	/**proxy.AddBackend(&teaconfigs.ServerBackendConfig{
@@ -114,13 +116,12 @@ func TestRequest_CallProxy(t *testing.T) {
 	})**/
 	request.proxy = proxy
 
-	err = request.Call(writer)
+	err = request.call(writer)
 	a.IsNil(err)
-	writer.Close()
 
-	a.Log("status:", request.responseStatus, request.responseStatusMessage)
-	a.Log("requestTime:", request.requestTime)
-	a.Log("bytes send:", request.responseBytesSent, request.responseBodyBytesSent)
+	a.Log("status:", writer.StatusCode())
+	a.Log("requestTime:", request.requestCost)
+	a.Log("bytes send:", writer.SentBodyBytes())
 }
 
 func TestRequest_CallFastcgi(t *testing.T) {
@@ -148,13 +149,12 @@ func TestRequest_CallFastcgi(t *testing.T) {
 		Pass: "127.0.0.1:9000",
 	}
 	request.fastcgi.Validate()
-	err = request.Call(writer)
+	err = request.call(writer)
 	a.IsNil(err)
-	writer.Close()
 
-	a.Log("status:", request.responseStatus, request.responseStatusMessage)
-	a.Log("requestTime:", request.requestTime)
-	a.Log("bytes send:", request.responseBytesSent, request.responseBodyBytesSent)
+	a.Log("status:", writer.StatusCode())
+	a.Log("requestTime:", request.requestCost)
+	a.Log("bytes send:", writer.SentBodyBytes())
 }
 
 func TestRequest_CallFastcgiPerformance(t *testing.T) {
@@ -182,13 +182,12 @@ func TestRequest_CallFastcgiPerformance(t *testing.T) {
 		Pass: "127.0.0.1:9000",
 	}
 	request.fastcgi.Validate()
-	err = request.Call(writer)
+	err = request.call(writer)
 	a.IsNil(err)
-	writer.Close()
 
-	a.Log("status:", request.responseStatus, request.responseStatusMessage)
-	a.Log("requestTime:", request.requestTime)
-	a.Log("bytes send:", request.responseBytesSent, request.responseBodyBytesSent)
+	a.Log("status:", writer.StatusCode())
+	a.Log("requestTime:", request.requestCost)
+	a.Log("bytes send:", writer.SentBodyBytes())
 }
 
 func TestRequest_Format(t *testing.T) {
@@ -207,7 +206,7 @@ func TestRequest_Format(t *testing.T) {
 	req.filePath = "hello.go"
 	req.scheme = "http"
 
-	a.IsTrue(req.requestRemoteAddr() == "127.0.0.1:1234")
+	a.IsTrue(req.requestRemoteAddr() == "127.0.0.1")
 	a.IsTrue(req.requestRemotePort() == 1234)
 	a.IsTrue(req.requestURI() == req.uri)
 	a.IsTrue(req.requestPath() == "/hello/world")
@@ -218,7 +217,51 @@ func TestRequest_Format(t *testing.T) {
 	a.IsTrue(req.requestQueryString() == "name=Lu&age=20")
 	a.IsTrue(req.requestQueryParam("name") == "Lu")
 
-	t.Log(req.format("hello ${teaVersion} remoteAddr:${remoteAddr} name:${arg.name} header:${header.Content-Type} test:${test}"))
+	req.raw.Header["X-Real-IP"] = []string{"192.168.1.100"}
+	a.IsTrue(req.requestRemoteAddr() == "192.168.1.100")
+
+	delete(req.raw.Header, "X-Real-IP")
+	req.raw.Header["X-Real-Ip"] = []string{"192.168.1.101"}
+	a.IsTrue(req.requestRemoteAddr() == "192.168.1.101")
+
+	delete(req.raw.Header, "X-Real-IP")
+	delete(req.raw.Header, "X-Real-Ip")
+	req.raw.Header["X-Forwarded-For"] = []string{"192.168.1.102, 192.168.1.103"}
+	a.IsTrue(req.requestRemoteAddr() == "192.168.1.102")
+
+	req.raw.Header["X-Forwarded-For"] = []string{"192.168.1.103"}
+	a.IsTrue(req.requestRemoteAddr() == "192.168.1.103")
+
+	t.Log(req.Format("hello ${teaVersion} remoteAddr:${remoteAddr} name:${arg.name} header:${header.Content-Type} test:${test}"))
+}
+
+func TestRequest_FormatPerformance(t *testing.T) {
+	rawReq, err := http.NewRequest("GET", "http://www.example.com/hello/world?name=Lu&age=20", bytes.NewBuffer([]byte("hello=world")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawReq.RemoteAddr = "127.0.0.1:1234"
+	rawReq.Header.Add("Content-Type", "text/plain")
+
+	req := NewRequest(rawReq)
+	req.uri = "/hello/world?name=Lu&age=20"
+	req.method = "GET"
+	req.filePath = "hello.go"
+	req.scheme = "http"
+
+	count := 10000
+	before := time.Now()
+	result := ""
+	for i := 0; i < count; i ++ {
+		for n := 0; n < 5; n ++ {
+			source := "hello ${teaVersion} remoteAddr:${remoteAddr} name:${arg.name} header:${header.Content-Type} test:${test} /hello " + fmt.Sprintf("%d", n)
+			result = req.Format(source)
+		}
+	}
+
+	cost := int(float64(count) / time.Since(before).Seconds())
+	t.Log(cost)
+	t.Log(result)
 }
 
 func TestRequest_Index(t *testing.T) {
@@ -252,19 +295,23 @@ func TestRequest_LocationVariables(t *testing.T) {
 	server.Root = "/home"
 
 	{
-		location := teaconfigs.NewLocationConfig()
+		location := teaconfigs.NewLocation()
 		location.On = true
 		location.Pattern = "~ /hello/(\\w)(\\w+)"
 		location.Root = "/hello/${1}/${host}"
 		location.Index = []string{"hello_${1}${2}"}
 		location.Charset = "${arg.charset}"
-		location.SetHeader("hello", "${1}")
+		location.AddHeader(&shared.HeaderConfig{
+			On: true, Name: "hello", Value: "${1}",
+		})
 		err := location.Validate()
 		a.IsNil(err)
 
 		server.AddLocation(location)
 
-		matches, ok := location.Match("/hello/world")
+		matches, ok := location.Match("/hello/world", func(source string) string {
+			return source
+		})
 		if ok {
 			t.Log(matches)
 		}
@@ -288,7 +335,7 @@ func TestRequest_LocationVariables(t *testing.T) {
 	t.Log("index:", req.index)
 	t.Log("charset:", req.charset)
 
-	for _, header := range req.headers {
+	for _, header := range req.responseHeaders {
 		t.Log("headers:", header.Name, ":", header.Value)
 	}
 }
@@ -304,13 +351,13 @@ func TestRequest_RewriteVariables(t *testing.T) {
 	server := teaconfigs.NewServerConfig()
 	server.Root = "/home/${arg.charset}"
 	server.Charset = "[${arg.charset}]"
-	server.AddHeader(&teaconfigs.HeaderConfig{
+	server.AddHeader(&shared.HeaderConfig{
 		Name:  "Charset",
 		Value: "${arg.charset}",
 	})
 
 	{
-		location := teaconfigs.NewLocationConfig()
+		location := teaconfigs.NewLocation()
 		location.On = true
 		location.Pattern = "/"
 
@@ -343,9 +390,128 @@ func TestRequest_RewriteVariables(t *testing.T) {
 	t.Log("index:", req.index)
 	t.Log("charset:", req.charset)
 
-	for _, header := range req.headers {
+	for _, header := range req.responseHeaders {
 		t.Log("headers:", header.Name, ":", header.Value)
 	}
+}
+
+func TestPerformanceConfigure(t *testing.T) {
+	rawReq, err := http.NewRequest("GET", "http://www.example.com/hello/world?name=Lu&age=20", bytes.NewBuffer([]byte("hello=world")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := teaconfigs.NewServerConfig()
+
+	backend := teaconfigs.NewBackendConfig()
+	backend.Address = "127.0.0.1:1234"
+	server.AddBackend(backend)
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaVersion"
+		h.Value = "${teaVersion}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaPort"
+		h.Value = "${remotePort}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaFile"
+		h.Value = "${requestFilename}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "Scheme"
+		h.Value = "${scheme}"
+		server.AddHeader(h)
+	}
+
+	err = server.Validate()
+
+	count := 10000
+	before := time.Now()
+
+	for i := 0; i < count; i ++ {
+		req := NewRequest(rawReq)
+		req.uri = "/hello/world?charset=utf-8"
+		req.host = "www.example.com"
+		req.responseHeaders = []*shared.HeaderConfig{}
+
+		err = req.configure(server, 0)
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+	}
+
+	cost := time.Since(before).Seconds()
+	t.Log(float64(count)/cost, "qps")
+}
+
+func TestPerformanceFormatHeaders(t *testing.T) {
+	rawReq, err := http.NewRequest("GET", "http://www.example.com/hello/world?name=Lu&age=20", bytes.NewBuffer([]byte("hello=world")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := teaconfigs.NewServerConfig()
+
+	backend := teaconfigs.NewBackendConfig()
+	backend.Address = "127.0.0.1:1234"
+	server.AddBackend(backend)
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaVersion"
+		h.Value = "${teaVersion}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaPort"
+		h.Value = "${remotePort}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "TeaFile"
+		h.Value = "${requestFilename}"
+		server.AddHeader(h)
+	}
+
+	{
+		h := shared.NewHeaderConfig()
+		h.Name = "Scheme"
+		h.Value = "${scheme}"
+		server.AddHeader(h)
+	}
+
+	err = server.Validate()
+
+	count := 10000
+	before := time.Now()
+
+	for i := 0; i < count; i ++ {
+		req := NewRequest(rawReq)
+		req.uri = "/hello/world?charset=utf-8"
+		req.host = "www.example.com"
+		req.responseHeaders = []*shared.HeaderConfig{}
+
+		server.FormatHeaders(req.Format)
+	}
+
+	cost := time.Since(before).Seconds()
+	t.Log(float64(count)/cost, "qps")
 }
 
 func TestPerformanceBackend(t *testing.T) {
@@ -369,7 +535,7 @@ func TestPerformanceBackend(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				c := SharedClientPool.client("127.0.0.1:9992")
+				c := SharedClientPool.client("123456", "127.0.0.1:9992", 15*time.Second, 0, 0)
 				resp, err := c.Do(req)
 
 				if err != nil {
@@ -422,7 +588,7 @@ func TestPerformanceStatic(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				c := SharedClientPool.client("127.0.0.1:9993")
+				c := SharedClientPool.client("123456", "127.0.0.1:9993", 15*time.Second, 0, 0)
 				resp, err := c.Do(req)
 
 				if err != nil {
@@ -452,4 +618,34 @@ func TestPerformanceStatic(t *testing.T) {
 	wg.Wait()
 
 	t.Log("success:", countSuccess, "fail:", countFail, "qps:", int(float64(countSuccess+countFail)/time.Since(beforeTime).Seconds()))
+}
+
+func TestRequest_Format2(t *testing.T) {
+	rawReq, err := http.NewRequest(http.MethodGet, "/hello?name=liu", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := NewRequest(rawReq)
+	req.uri = rawReq.URL.String()
+	t.Log("arg.name:", req.Format("${arg.name}"))
+}
+
+func BenchmarkNewRequest(b *testing.B) {
+	rawReq, err := http.NewRequest(http.MethodGet, "/hello?name=liu", nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var req *Request
+
+	for i := 0; i < b.N; i ++ {
+		req = NewRequest(rawReq)
+		_ = req
+	}
+}
+
+func BenchmarkParseURI(b *testing.B) {
+	for i := 0; i < b.N; i ++ {
+		url.ParseRequestURI("http://teaos.cn/hello?name=liu")
+	}
 }

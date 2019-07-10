@@ -2,10 +2,11 @@ package configs
 
 import (
 	"github.com/TeaWeb/code/teaconst"
+	"github.com/go-yaml/yaml"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/files"
+	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/logs"
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"sync"
 )
@@ -121,6 +122,23 @@ func (this *AdminConfig) FindUser(username string) *AdminUser {
 	return nil
 }
 
+// 使用Key查找用户
+func (this *AdminConfig) FindUserWithKey(key string) *AdminUser {
+	adminConfigLocker.Lock()
+	defer adminConfigLocker.Unlock()
+
+	if len(key) == 0 {
+		return nil
+	}
+
+	for _, user := range this.Users {
+		if user.Key == key {
+			return user
+		}
+	}
+	return nil
+}
+
 // 添加用户
 func (this *AdminConfig) AddUser(user *AdminUser) {
 	this.Users = append(this.Users, user)
@@ -178,8 +196,7 @@ func (this *AdminConfig) FindAllActiveGrants() []*AdminGrant {
 		NewAdminGrant("[超级权限]", AdminGrantAll),
 		NewAdminGrant("代理", AdminGrantProxy),
 		NewAdminGrant("日志", AdminGrantLog),
-		NewAdminGrant("统计", AdminGrantStatistics),
-		NewAdminGrant("本地服务", AdminGrantApp),
+		NewAdminGrant("本地服务", AdminGrantAgent),
 		NewAdminGrant("插件", AdminGrantPlugin),
 	}
 
@@ -197,4 +214,29 @@ func (this *AdminConfig) FindAllActiveGrants() []*AdminGrant {
 // 添加授权
 func (this *AdminConfig) AddGrant(grant *AdminGrant) {
 	this.Grant = append(this.Grant, grant)
+}
+
+// 检查是否允许IP
+func (this *AdminConfig) AllowIP(ip string) bool {
+	// deny
+	if len(this.Security.Deny) > 0 && lists.ContainsString(this.Security.Deny, ip) {
+		return false
+	}
+
+	// allow
+	if lists.ContainsString(this.Security.Allow, "all") || lists.ContainsString(this.Security.Allow, "0.0.0.0") || lists.ContainsString(this.Security.Allow, ip) {
+		return true
+	}
+
+	return false
+}
+
+// 重置状态
+func (this *AdminConfig) Reset() {
+	adminConfigLocker.Lock()
+	defer adminConfigLocker.Unlock()
+
+	for _, u := range this.Users {
+		u.Reset()
+	}
 }

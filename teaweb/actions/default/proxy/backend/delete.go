@@ -1,29 +1,37 @@
 package backend
 
 import (
-	"github.com/iwind/TeaGo/actions"
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/iwind/TeaGo/lists"
-	"github.com/TeaWeb/code/teaweb/actions/default/proxy/global"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
+	"github.com/iwind/TeaGo/actions"
 )
 
 type DeleteAction actions.Action
 
+// 删除后端服务器
 func (this *DeleteAction) Run(params struct {
-	Filename string
-	Index    int
+	ServerId   string
+	LocationId string
+	Websocket  bool
+	BackendId  string
 }) {
-	server, err := teaconfigs.NewServerConfigFromFile(params.Filename)
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
+	}
+
+	backendList, err := server.FindBackendList(params.LocationId, params.Websocket)
 	if err != nil {
 		this.Fail(err.Error())
 	}
+	backendList.DeleteBackend(params.BackendId)
 
-	if params.Index >= 0 && params.Index < len(server.Backends) {
-		server.Backends = lists.Remove(server.Backends, params.Index).([]*teaconfigs.ServerBackendConfig)
+	err = server.Save()
+	if err != nil {
+		this.Fail("保存失败：" + err.Error())
 	}
 
-	server.Save()
-	global.NotifyChange()
+	proxyutils.NotifyChange()
 
 	this.Refresh().Success()
 }

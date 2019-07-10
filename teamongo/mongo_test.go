@@ -2,13 +2,18 @@ package teamongo
 
 import (
 	"context"
-	"github.com/mongodb/mongo-go-driver/bson"
+	"fmt"
+	"github.com/iwind/TeaGo/logs"
+	"github.com/iwind/TeaGo/maps"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/x/bsonx"
 	"testing"
+	"time"
 )
 
 func TestSharedClient(t *testing.T) {
 	client := SharedClient()
-	t.Log(client.Database("teadb").Collection("accessLog").Find(context.Background(), nil))
+	t.Log(client.Database("teadb").Collection("accessLog").Find(context.Background(), map[string]interface{}{}))
 }
 
 func TestUnmarshalJSON(t *testing.T) {
@@ -28,33 +33,69 @@ func TestUnmarshalJSON(t *testing.T) {
 	}`
 	t.Log(data)
 
-	arr := bson.NewDocument()
-	err := bson.UnmarshalExtJSON([]byte(data), true, &arr)
+	value, err := BSONArrayBytes([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(arr)
+	t.Log(value)
 }
 
-func TestUnmarshalJSON2(t *testing.T) {
-	data := `{
-		"group": [  "1", "2", "3" ]
-	}`
-	t.Log(data)
+func TestFindCollection(t *testing.T) {
+	coll := FindCollection("logs.20190302")
+	//opts := options.FindOne().SetHint(map[string]interface{}{
+	//	"serverId": 1,
+	//})
+	{
+		before := time.Now()
+		cursor, err := coll.Find(context.Background(), map[string]interface{}{
+			"serverId": "VEQ6mBKq7w7lFUzj",
+		}, options.Find().SetLimit(1).SetHint(map[string]interface{}{
+			"serverId": 1,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cursor.Close(context.Background())
+		if cursor.Next(context.Background()) {
+			t.Log("has")
+		} else {
+			t.Log("not has")
+		}
+		t.Log(time.Since(before).Seconds(), "s")
+	}
+}
 
-	arr := bson.NewDocument()
-	err := bson.UnmarshalExtJSON([]byte(data), true, &arr)
+func TestCollectionStat(t *testing.T) {
+	db := SharedClient().Database(DatabaseName)
+	cursor, err := db.ListCollections(context.Background(), maps.Map{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(arr)
-}
+	defer cursor.Close(context.Background())
 
-func TestUnmarshalJSONArray(t *testing.T) {
-	arr := bson.NewArray()
-	arr.Append(bson.EC.String("", "1").Value())
-	arr.Append(bson.EC.String("", "2").Value())
-	arr.Append(bson.EC.String("", "3").Value())
+	for cursor.Next(context.Background()) {
+		m := maps.Map{}
+		err := cursor.Decode(&m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := m["name"].(string)
+		t.Logf("%#v", name)
 
-	t.Log(arr)
+		result := db.RunCommand(context.Background(), bsonx.Doc{{"collStats", bsonx.String(name)}, {"verbose", bsonx.Boolean(false)}})
+		if result.Err() != nil {
+			t.Fatal(result.Err())
+		}
+
+		m1 := maps.Map{}
+		err = result.Decode(&m1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logs.PrintAsJSON(maps.Map{
+			"count": m1.GetInt("count"),
+			"size":  fmt.Sprintf("%.2fM", float64(m1.GetInt("size"))/1024/1024),
+			"ok":    m1.GetInt("ok"),
+		}, t)
+	}
 }

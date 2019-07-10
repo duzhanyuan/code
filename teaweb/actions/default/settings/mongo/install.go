@@ -102,7 +102,7 @@ func (this *InstallAction) RunPost(params struct{}) {
 		}
 	}
 
-	resp, err := http.Get("http://meloy.cn/downloads/mongodb.json")
+	resp, err := http.Get("http://dl.teaos.cn/mongodb.json")
 	if err != nil {
 		this.Fail("发生错误：", err.Error())
 	}
@@ -141,7 +141,8 @@ func (this *InstallAction) RunPost(params struct{}) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	url := "http://meloy.cn/downloads/" + fileName
+	url := "http://dl.teaos.cn/" + fileName
+
 	downloader.Add(url, "", target+".tmp")
 	downloader.OnProgress(func(item *nets.DownloaderItem) {
 		installStatus = "download"
@@ -264,7 +265,7 @@ func (this *InstallAction) start(mongodbDir string) {
 	p := processes.NewProcess(mongodbDir+"/bin/mongod", "--dbpath="+mongodbDir+"/data", "--fork", "--logpath="+mongodbDir+"/data/fork.log")
 	p.SetPwd(mongodbDir)
 
-	logs.Println(mongodbDir+"/bin/mongod", "--dbpath="+mongodbDir+"/data", "--fork", "--logpath="+mongodbDir+"/data/fork.log")
+	logs.Println("start mongo:", mongodbDir+"/bin/mongod", "--dbpath="+mongodbDir+"/data", "--fork", "--logpath="+mongodbDir+"/data/fork.log")
 
 	err := p.StartBackground()
 	if err != nil {

@@ -2,13 +2,15 @@ package tealogs
 
 import (
 	"context"
+	"github.com/TeaWeb/code/teageo"
 	"github.com/TeaWeb/code/teamongo"
 	"github.com/TeaWeb/uaparser"
 	"github.com/iwind/TeaGo/Tea"
-	"github.com/mongodb/mongo-go-driver/bson"
-	"github.com/mongodb/mongo-go-driver/bson/objectid"
-	"github.com/mongodb/mongo-go-driver/mongo/findopt"
+	"github.com/iwind/TeaGo/assert"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"log"
+	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -75,7 +77,7 @@ func TestLogParseExtension(t *testing.T) {
 
 func TestLogOSParser1(t *testing.T) {
 	userAgent := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.59 Safari/537.36"
-	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	parser, err := uaparser.NewParser(Tea.Root + "/web/resources" + Tea.DS + "regexes.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,14 +100,14 @@ func TestLogOSParser1(t *testing.T) {
 	t.Log(client.OS.PatchMinor)  // ""
 	t.Log(client.Device.Family)  // "Kindle Fire"
 
-	cost := float64(time.Since(now).Nanoseconds()) / 1000000000
-	t.Log("cost:", cost)
+	cost := time.Since(now).Seconds()
+	t.Log("cost:", cost, "s")
 	t.Log("QPS", 1/cost)
 }
 
 func TestLogOSParser2(t *testing.T) {
 	userAgent := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.59 Safari/537.36"
-	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	parser, err := uaparser.NewParser(Tea.Root + "/web/resources" + Tea.DS + "regexes.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -123,7 +125,7 @@ func TestLogOSParser2(t *testing.T) {
 
 func TestLogOSParser3(t *testing.T) {
 	userAgent := " Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1)"
-	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	parser, err := uaparser.NewParser(Tea.Root + "/web/resources" + Tea.DS + "regexes.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestLogOSParser3(t *testing.T) {
 
 func TestLogOSParser4(t *testing.T) {
 	userAgent := "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36"
-	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	parser, err := uaparser.NewParser(Tea.Root + "/web/resources" + Tea.DS + "regexes.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -160,6 +162,12 @@ func TestLogOSParser4(t *testing.T) {
 }
 
 func TestLogParse5(t *testing.T) {
+	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "web" + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userAgentParser = parser
+
 	userAgents := []string{
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.59 Safari/537.36",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.13; rv:60.0) Gecko/20100101 Firefox/60.0",
@@ -171,7 +179,6 @@ func TestLogParse5(t *testing.T) {
 		"hello",
 	}
 
-	beforeTime1 := time.Now()
 	for _, userAgent := range userAgents {
 		accessLog := &AccessLog{
 			UserAgent: userAgent,
@@ -180,24 +187,31 @@ func TestLogParse5(t *testing.T) {
 
 		t.Log("=======")
 		t.Log(userAgent)
-		t.Logf("%#v", accessLog.Extend.Client)
-	}
-
-	beforeTime2 := time.Now()
-	for i := 0; i < 10000; i ++ {
-		for _, userAgent := range userAgents {
-			accessLog := &AccessLog{
-				UserAgent: userAgent,
-			}
-			accessLog.parseUserAgent()
-
-			//t.Log("=======")
-			//t.Log(userAgent)
-			//t.Logf("%#v", accessLog.Extend.Client)
+		if accessLog.Extend != nil {
+			t.Logf("%#v", accessLog.Extend.Client)
 		}
 	}
-	t.Log(float64(time.Since(beforeTime1).Nanoseconds())/1000000, "ms")
-	t.Log(float64(time.Since(beforeTime2).Nanoseconds())/1000000, "ms")
+}
+
+func BenchmarkAccessLog_ParseUserAgent(b *testing.B) {
+	runtime.GOMAXPROCS(1)
+
+	parser, err := uaparser.NewParser(Tea.Root + Tea.DS + "web" + Tea.DS + "resources" + Tea.DS + "regexes.yaml")
+	if err != nil {
+		b.Fatal(err)
+	}
+	userAgentParser = parser
+	teageo.SetupDB()
+
+	for i := 0; i < b.N; i ++ {
+		accessLog := &AccessLog{}
+		accessLog.UserAgent = "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36"
+		accessLog.RemoteAddr = "160.16.241." + strconv.Itoa(i%200)
+		accessLog.ContentType = "text/html; charset=utf-8"
+		accessLog.RequestPath = "/hello.php"
+		//accessLog.SetWritingFields([]int{AccessLogFieldHeader})
+		accessLog.Parse()
+	}
 }
 
 func TestAccessLogger_DB(t *testing.T) {
@@ -206,7 +220,7 @@ func TestAccessLogger_DB(t *testing.T) {
 		t.Fatal("client=nil")
 	}
 
-	objectId, _ := objectid.FromHex("abc")
+	objectId, _ := primitive.ObjectIDFromHex("abc")
 	accessLog := AccessLog{
 		Id:   objectId,
 		Args: "a=b",
@@ -226,7 +240,7 @@ func TestAccessLogger_DB(t *testing.T) {
 	}
 
 	r, err := client.
-		Database("teaweb").
+		Database(teamongo.DatabaseName).
 		Collection("accessLogs").
 		InsertOne(context.Background(), accessLog)
 	if err != nil {
@@ -269,48 +283,41 @@ func TestAccessLog_Format(t *testing.T) {
 	t.Log(accessLog.Format(format))
 }
 
-func TestAccessLog_Decode(t *testing.T) {
-	client := teamongo.SharedClient()
-	if client == nil {
-		t.Fatal("client=nil")
-	}
+func TestAccessLog_ParseGEO(t *testing.T) {
+	teageo.SetupDB()
 
-	r, err := client.
-		Database("teaweb").
-		Collection("accessLogs").
-		Find(context.Background(), bson.NewDocument(
-			//bson.EC.String("remoteAddr", "127.0.0.1"),
-			bson.EC.SubDocument("id", bson.NewDocument(bson.EC.Int64("$gt", 1535886567943382000))),
-		), findopt.Skip(0), findopt.Limit(2), findopt.Sort(bson.NewDocument(
-
-			bson.EC.Int32("_id", 1),
-		)))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for r.Next(context.Background()) {
-		accessLog := AccessLog{}
-		err = r.Decode(&accessLog)
-		if err != nil {
-			t.Fatal(err)
+	{
+		accessLog := &AccessLog{
+			RemoteAddr: "114.240.210.253",
 		}
-
-		t.Log("mongoId:", accessLog.Id)
-		t.Log(accessLog)
+		accessLog.parseGeoIP()
 	}
 
-	client.Disconnect(context.Background())
+	before := time.Now()
+	accessLog := &AccessLog{
+		RemoteAddr: "114.240.210.253",
+	}
+	accessLog.parseGeoIP()
+	cost := time.Since(before).Seconds()
+
+	if accessLog.Extend != nil {
+		t.Logf("%#v", accessLog.Extend.Geo)
+	}
+	t.Log(1 / cost)
 }
 
-func TestAccessLog_ParseGEO(t *testing.T) {
-	accessLog := &AccessLog{
-		RemoteAddr: "183.131.156.10",
-	}
+func TestAccessLog_CleanFields(t *testing.T) {
+	a := assert.NewAssertion(t)
 
-	//ip := net.ParseIP("183.131.156.10")
-	//ip := net.ParseIP("111.197.204.174")
-	accessLog.parseGeoIP()
+	accessLog := NewAccessLog()
+	accessLog.UserAgent = "123"
+	accessLog.Header = map[string][]string{}
+	accessLog.Cookie = map[string]string{}
+	accessLog.writingFields = []int{AccessLogFieldHeader, AccessLogFieldArg, AccessLogFieldCookie}
+	accessLog.CleanFields()
+	t.Log(accessLog.UserAgent)
+	t.Log(accessLog.Header)
+	t.Log(accessLog.Cookie)
 
-	t.Logf("%#v", accessLog.Extend.Geo)
+	a.IsNil(accessLog.Extend)
 }

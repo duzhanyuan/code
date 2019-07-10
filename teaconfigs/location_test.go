@@ -1,12 +1,14 @@
 package teaconfigs
 
 import (
+	"fmt"
 	"github.com/iwind/TeaGo/assert"
+	"sync"
 	"testing"
 )
 
 func TestLocationConfig_Match(t *testing.T) {
-	location := NewLocationConfig()
+	location := NewLocation()
 	err := location.Validate()
 	if err != nil {
 		t.Fatal(err)
@@ -17,86 +19,80 @@ func TestLocationConfig_Match(t *testing.T) {
 	location.Pattern = "/hell"
 	a.IsNotError(location.Validate())
 
-	_, b := location.Match("/hello")
+	_, b := location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 
 	location.Pattern = "/hello"
 	a.IsNotError(location.Validate())
 
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 
 	location.Pattern = "~ ^/\\w+$"
 	a.IsNotError(location.Validate())
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 
 	location.Pattern = "!~ ^/HELLO$"
 	a.IsNotError(location.Validate())
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 
 	location.Pattern = "~* ^/HELLO$"
 	a.IsNotError(location.Validate())
 
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 
 	location.Pattern = "!~* ^/HELLO$"
 	a.IsNotError(location.Validate())
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsFalse(b)
 
 	location.Pattern = "= /hello"
 	a.IsNotError(location.Validate())
-	_, b = location.Match("/hello")
+	_, b = location.Match("/hello", func(source string) string {
+		return source
+	})
 	a.IsTrue(b)
 }
 
-func TestLocationConfig_RemoveFastcgiAt(t *testing.T) {
-	a := assert.NewAssertion(t).Quiet()
-
-	location := NewLocationConfig()
-	location.RemoveFastcgiAt(1)
-	t.Log(location.Fastcgi)
-
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9000",
-	})
-	location.RemoveFastcgiAt(1)
-	a.IsTrue(len(location.Fastcgi) == 1)
-
-	location.RemoveFastcgiAt(0)
-	a.IsTrue(len(location.Fastcgi) == 0)
-
-	location.Fastcgi = []*FastcgiConfig{}
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9001",
-	})
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9002",
-	})
-	location.RemoveFastcgiAt(1)
-	a.IsTrue(len(location.Fastcgi) == 1)
-	a.IsTrue(location.Fastcgi[0].Pass == "127.0.0.1:9001")
-
-	location.Fastcgi = []*FastcgiConfig{}
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9001",
-	})
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9002",
-	})
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9003",
-	})
-	location.AddFastcgi(&FastcgiConfig{
-		Pass: "127.0.0.1:9004",
-	})
-	location.RemoveFastcgiAt(1)
-	for _, fastcgi := range location.Fastcgi {
-		t.Log("fastcgi left:", fastcgi.Pass)
+func TestLocationConfig_Match_Concurrent(t *testing.T) {
+	location := NewLocation()
+	location.Pattern = `~ /(?P<name>\w+)`
+	err := location.Validate()
+	if err != nil {
+		t.Fatal(err)
 	}
-	a.IsTrue(len(location.Fastcgi) == 3)
-	a.IsTrue(location.Fastcgi[0].Pass == "127.0.0.1:9001")
+
+	wg := &sync.WaitGroup{}
+	count := 10000
+	wg.Add(count)
+
+	for i := 0; i < count; i ++ {
+		go func(i int) {
+			defer wg.Done()
+
+			u := "hello" + fmt.Sprintf("%d", i)
+			result, b := location.Match("/"+u, func(source string) string {
+				return source
+			})
+			if !b || result["name"] != u {
+				t.Fatal("u:", u, result["name"])
+			}
+		}(i)
+	}
+	wg.Wait()
 }

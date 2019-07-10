@@ -4,7 +4,6 @@ import (
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/actions"
 	"github.com/iwind/TeaGo/files"
-	"log"
 	"sync"
 )
 
@@ -13,6 +12,7 @@ type RuntimeAction actions.Action
 var runtimeLogOffset = int64(0)
 var runtimeLogLocker = sync.Mutex{}
 
+// 系统日志
 func (this *RuntimeAction) Run(params struct{}) {
 	runtimeLogLocker.Lock()
 	runtimeLogOffset = 0
@@ -21,6 +21,7 @@ func (this *RuntimeAction) Run(params struct{}) {
 	this.Show()
 }
 
+// 读取数据
 func (this *RuntimeAction) RunPost() {
 	runtimeLogLocker.Lock()
 	runtimeLogLocker.Unlock()
@@ -42,7 +43,6 @@ func (this *RuntimeAction) RunPost() {
 			if n > 0 {
 				for {
 					newOffset, err := reader.Seek(-1, files.WhenceCurrent)
-					log.Println(newOffset)
 					if err != nil {
 						runtimeLogOffset = newOffset
 						break

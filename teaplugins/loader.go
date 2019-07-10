@@ -3,18 +3,14 @@ package teaplugins
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/TeaWeb/code/teaapps"
-	"github.com/TeaWeb/code/teacharts"
-	"github.com/TeaWeb/plugin/apps"
 	"github.com/TeaWeb/plugin/messages"
 	"github.com/iwind/TeaGo/logs"
-	"github.com/iwind/TeaGo/processes"
-	"os"
+	"io"
 	"path/filepath"
 	"reflect"
-	"time"
 )
 
+// 插件加载器
 type Loader struct {
 	path   string
 	plugin *Plugin
@@ -22,9 +18,14 @@ type Loader struct {
 	methods   map[string]reflect.Method
 	thisValue reflect.Value
 
-	writer *os.File
+	writer PipeInterface
 
 	debug bool
+}
+
+type PipeInterface interface {
+	Read([]byte) (n int, err error)
+	Write([]byte) (n int, err error)
 }
 
 func NewLoader(path string) *Loader {
@@ -35,7 +36,7 @@ func NewLoader(path string) *Loader {
 
 	// 当前methods
 	t := reflect.TypeOf(loader)
-	for i := 0; i < t.NumMethod(); i ++ {
+	for i := 0; i < t.NumMethod(); i++ {
 		method := t.Method(i)
 		loader.methods[method.Name] = method
 	}
@@ -49,91 +50,59 @@ func (this *Loader) Debug() {
 	this.debug = true
 }
 
-// 加载插件
-func (this *Loader) Load() error {
-	reader, w /** 子进程写入器 **/, err := os.Pipe()
-	if err != nil {
-		return err
-	}
+func (this *Loader) pipe(reader PipeInterface, writer PipeInterface) {
+	buf := make([]byte, 1024)
+	msgData := []byte{}
+	for {
+		if this.debug {
+			logs.Println("[plugin][" + this.shortFileName() + "]try to read buf")
+		}
 
-	r2 /** 子进程读取器 **/, writer, err := os.Pipe()
-	if err != nil {
-		return err
-	}
+		n, err := reader.Read(buf)
 
-	this.writer = writer
+		if n > 0 {
+			msgData = append(msgData, buf[:n] ...)
 
-	p := processes.NewProcess(this.path)
-	p.AppendFile(r2, w)
-
-	go func() {
-		buf := make([]byte, 1024)
-		msgData := []byte{}
-		for {
 			if this.debug {
-				logs.Println("[plugin][" + this.shortFileName() + "]try to read buf")
+				logs.Println("[plugin]["+this.shortFileName()+"]len:", len(msgData), ",", "read msg data:", string(msgData))
 			}
 
-			n, err := reader.Read(buf)
+			msgLen := uint32(len(msgData))
+			h := uint32(24) // header length
 
-			if n > 0 {
-				msgData = append(msgData, buf[:n] ...)
+			if msgLen > h { // 数据组成方式： | actionLen[8] | dataLen[8] | action | data[len-8]
+				id := binary.BigEndian.Uint32(msgData[:8])
+				l1 := binary.BigEndian.Uint32(msgData[8:16])
+				l2 := binary.BigEndian.Uint32(msgData[16:24])
 
-				if this.debug {
-					logs.Println("[plugin]["+this.shortFileName()+"]len:", len(msgData), ",", "read msg data:", string(msgData))
-				}
+				if msgLen >= h+l1+l2 { // 数据已经完整了
+					action := string(msgData[h : h+l1])
+					valueData := msgData[h+l1 : h+l1+l2]
 
-				msgLen := uint32(len(msgData))
-				h := uint32(24) // header length
+					msgData = msgData[h+l1+l2:]
 
-				if msgLen > h { // 数据组成方式： | actionLen[8] | dataLen[8] | action | data[len-8]
-					id := binary.BigEndian.Uint32(msgData[:8])
-					l1 := binary.BigEndian.Uint32(msgData[8:16])
-					l2 := binary.BigEndian.Uint32(msgData[16:24])
+					ptr, err := messages.Unmarshal(action, valueData)
+					if err != nil {
+						logs.Println("[plugin]["+this.shortFileName()+"[unmarshal message error:", err.Error())
+						continue
+					}
 
-					if msgLen >= h+l1+l2 { // 数据已经完整了
-						action := string(msgData[h : h+l1])
-						valueData := msgData[h+l1 : h+l1+l2]
-
-						msgData = msgData[h+l1+l2:]
-
-						ptr, err := messages.Unmarshal(action, valueData)
-						if err != nil {
-							logs.Println("[plugin]["+this.shortFileName()+"[unmarshal message error:", err.Error())
-							continue
-						}
-
-						err = this.CallAction(ptr, id)
-						if err != nil {
-							logs.Println("[plugin]["+this.shortFileName()+"]call action error:", err.Error())
-							continue
-						}
+					err = this.CallAction(ptr, id)
+					if err != nil {
+						logs.Println("[plugin]["+this.shortFileName()+"]call action error:", err.Error())
+						continue
 					}
 				}
 			}
-
-			if err != nil {
-				logs.Println("[plugin][" + this.shortFileName() + "]" + err.Error())
-				break
-			}
 		}
-	}()
 
-	err = p.Start()
-	if err != nil {
-		return err
+		if err != nil {
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				logs.Println("[plugin][" + this.shortFileName() + "]break:" + err.Error())
+			}
+			break
+		}
 	}
-
-	err = p.Wait()
-	if err != nil {
-		reader.Close()
-
-		// 重新加载
-		time.Sleep(1 * time.Second)
-		return this.Load()
-	}
-
-	return nil
 }
 
 func (this *Loader) CallAction(ptr interface{}, messageId uint32) error {
@@ -145,7 +114,7 @@ func (this *Loader) CallAction(ptr interface{}, messageId uint32) error {
 
 	method, found := this.methods["Action"+action.Name()]
 	if !found {
-		return errors.New("[plugin]handler for '" + action.Name() + "' not found")
+		return errors.New("handler for '" + action.Name() + "' not found")
 
 	}
 	method.Func.Call([]reflect.Value{this.thisValue, reflect.ValueOf(action)})
@@ -211,50 +180,6 @@ func (this *Loader) ActionRegisterPlugin(action *messages.RegisterPluginAction) 
 			HasResponseFilters = true
 		}
 
-		// widget
-		for _, w := range p.Widgets {
-			w2 := NewWidget()
-			w2.Id = w.Id
-			w2.Name = w.Name
-			w2.Icon = w.Icon
-			w2.Title = w.Title
-			w2.URL = w.URL
-			w2.MoreURL = w.MoreURL
-			w2.TopBar = w.TopBar
-			w2.MenuBar = w.MenuBar
-			w2.HelperBar = w.HelperBar
-			w2.Dashboard = w.Dashboard
-			w2.Group = w.Group
-			w2.OnForceReload(func() {
-				action := new(messages.ReloadWidgetAction)
-				action.WidgetId = w2.Id
-				this.Write(action)
-			})
-			w2.OnReload(func() {
-				action := new(messages.ReloadWidgetAction)
-				action.WidgetId = w2.Id
-				this.Write(action)
-			})
-
-			// chart
-			for _, c := range w.Charts {
-				c2 := teacharts.ConvertInterface(c)
-				if c2 == nil {
-					continue
-				}
-				w2.AddChart(c2)
-			}
-
-			p2.AddWidget(w2)
-		}
-
-		// apps
-		for _, a := range p.Apps {
-			a2 := teaapps.NewApp()
-			a2.LoadFromInterface(a)
-			p2.AddApp(a2)
-		}
-
 		Register(p2)
 
 		this.plugin = p2
@@ -264,56 +189,12 @@ func (this *Loader) ActionRegisterPlugin(action *messages.RegisterPluginAction) 
 	this.Write(&messages.StartAction{})
 }
 
-func (this *Loader) ActionReloadChart(action *messages.ReloadChartAction) {
-	chart := teacharts.ConvertInterface(action.Chart)
-	if chart == nil {
-		return
-	}
-
-	// 查找
-	for _, w := range this.plugin.Widgets {
-		for index, c := range w.Charts {
-			if c.ChartId() == chart.ChartId() {
-				w.Charts[index] = chart
-				break
-			}
-		}
-	}
-}
-
 func (this *Loader) ActionFilterRequest(action *messages.FilterRequestAction) {
 	messages.ActionQueue.Notify(action)
 }
 
 func (this *Loader) ActionFilterResponse(action *messages.FilterResponseAction) {
 	messages.ActionQueue.Notify(action)
-}
-
-func (this *Loader) ActionReloadApps(action *messages.ReloadAppsAction) {
-	this.plugin.ResetApps()
-
-	for _, a := range action.Apps {
-		a2 := teaapps.NewApp()
-		a2.LoadFromInterface(a)
-		a2.OnReload(func() {
-			this.Write(&messages.ReloadAppAction{
-				App: &apps.App{
-					Id: a.Id,
-				},
-			})
-		})
-		this.plugin.AddApp(a2)
-	}
-}
-
-func (this *Loader) ActionReloadApp(action *messages.ReloadAppAction) {
-	a := action.App
-	if a != nil {
-		app := this.plugin.AppWithId(a.Id)
-		if app != nil {
-			app.LoadFromInterface(a)
-		}
-	}
 }
 
 func (this *Loader) Write(action messages.ActionInterface) error {

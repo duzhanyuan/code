@@ -1,30 +1,30 @@
 package locations
 
 import (
-	"github.com/iwind/TeaGo/actions"
 	"github.com/TeaWeb/code/teaconfigs"
-	"github.com/iwind/TeaGo/lists"
-	"github.com/TeaWeb/code/teaweb/actions/default/proxy/global"
+	"github.com/TeaWeb/code/teaweb/actions/default/proxy/proxyutils"
+	"github.com/iwind/TeaGo/actions"
 )
 
 type DeleteAction actions.Action
 
+// 删除路径规则
 func (this *DeleteAction) Run(params struct {
-	Filename string
-	Index    int
+	ServerId   string
+	LocationId string
 }) {
-	proxy, err := teaconfigs.NewServerConfigFromFile(params.Filename)
+	server := teaconfigs.NewServerConfigFromId(params.ServerId)
+	if server == nil {
+		this.Fail("找不到Server")
+	}
+
+	server.RemoveLocation(params.LocationId)
+	err := server.Save()
 	if err != nil {
-		this.Fail(err.Error())
+		this.Fail("保存失败：" + err.Error())
 	}
 
-	if params.Index >= 0 && params.Index < len(proxy.Locations) {
-		proxy.Locations = lists.Remove(proxy.Locations, params.Index).([]*teaconfigs.LocationConfig)
-	}
+	proxyutils.NotifyChange()
 
-	proxy.Save()
-
-	global.NotifyChange()
-
-	this.Refresh().Success()
+	this.Success()
 }

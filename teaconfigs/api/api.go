@@ -7,38 +7,47 @@ import (
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/logs"
 	"github.com/iwind/TeaGo/utils/string"
+	"math/rand"
 	"regexp"
+	"time"
 )
 
 //  API定义
 type API struct {
-	Filename       string                 `yaml:"filename" json:"filename"`             // 文件名
-	Path           string                 `yaml:"path" json:"path"`                     // 访问路径
-	Address        string                 `yaml:"address" json:"address"`               // 实际地址
-	Methods        []string               `yaml:"methods" json:"methods"`               // 方法
-	Params         []*APIParam            `yaml:"params" json:"params"`                 // 参数
-	Name           string                 `yaml:"name" json:"name"`                     // 名称
-	Description    string                 `yaml:"description" json:"description"`       // 描述
-	Mock           []string               `yaml:"mock" json:"mock"`                     // TODO
-	Author         string                 `yaml:"author" json:"author"`                 // 作者
-	Company        string                 `yaml:"company" json:"company"`               // 公司或团队
-	IsAsynchronous bool                   `yaml:"isAsynchronous" json:"isAsynchronous"` // TODO
-	Timeout        float64                `yaml:"timeout" json:"timeout"`               // TODO
-	MaxSize        uint                   `yaml:"maxSize" json:"maxSize"`               // TODO
-	Headers        []*shared.HeaderConfig `yaml:"headers" json:"headers"`               // TODO
-	TodoThings     []string               `yaml:"todo" json:"todo"`                     // 待做事宜
-	DoneThings     []string               `yaml:"done" json:"done"`                     // 已完成事宜
-	Response       []byte                 `yaml:"response" json:"response"`             // TODO
-	IsDeprecated   bool                   `yaml:"isDeprecated" json:"isDeprecated"`     // 是否过期
-	On             bool                   `yaml:"on" json:"on"`                         // 是否开启
-	Versions       []string               `yaml:"versions" json:"versions"`             // 版本信息
-	ModifiedAt     int64                  `yaml:"modifiedAt" json:"modifiedAt"`         // 最后修改时间
-	Username       string                 `yaml:"username" json:"username"`             // 最后修改用户名
-	Groups         []string               `yaml:"groups" json:"groups"`                 // 分组
-	Limit          *APILimit              `yaml:"limit" json:"limit"`                   // 限制 TODO
+	shared.HeaderList
+
+	Filename       string      `yaml:"filename" json:"filename"`             // 文件名
+	Path           string      `yaml:"path" json:"path"`                     // 访问路径
+	Address        string      `yaml:"address" json:"address"`               // 实际地址
+	Methods        []string    `yaml:"methods" json:"methods"`               // 方法
+	Params         []*APIParam `yaml:"params" json:"params"`                 // 参数
+	Name           string      `yaml:"name" json:"name"`                     // 名称
+	Description    string      `yaml:"description" json:"description"`       // 描述
+	MockFiles      []string    `yaml:"mockFiles" json:"mockFiles"`           // 假数据文件（Mock）
+	MockOn         bool        `yaml:"mockOn" json:"mockOn"`                 // 是否开启Mock
+	Author         string      `yaml:"author" json:"author"`                 // 作者
+	Company        string      `yaml:"company" json:"company"`               // 公司或团队
+	IsAsynchronous bool        `yaml:"isAsynchronous" json:"isAsynchronous"` // TODO
+	Timeout        float64     `yaml:"timeout" json:"timeout"`               // TODO
+	MaxSize        uint        `yaml:"maxSize" json:"maxSize"`               // TODO
+	TodoThings     []string    `yaml:"todo" json:"todo"`                     // 待做事宜
+	DoneThings     []string    `yaml:"done" json:"done"`                     // 已完成事宜
+	Response       []byte      `yaml:"response" json:"response"`             // 响应内容 TODO
+	IsDeprecated   bool        `yaml:"isDeprecated" json:"isDeprecated"`     // 是否过期
+	On             bool        `yaml:"on" json:"on"`                         // 是否开启
+	Versions       []string    `yaml:"versions" json:"versions"`             // 版本信息
+	ModifiedAt     int64       `yaml:"modifiedAt" json:"modifiedAt"`         // 最后修改时间
+	Username       string      `yaml:"username" json:"username"`             // 最后修改用户名
+	Groups         []string    `yaml:"groups" json:"groups"`                 // 分组
+	Limit          *APILimit   `yaml:"limit" json:"limit"`                   // 限制 TODO
+	AuthType       string      `yaml:"authType" json:"authType"`             // 认证方式
 
 	TestScripts   []string `yaml:"testScripts" json:"testScripts"`     // 脚本文件
 	TestCaseFiles []string `yaml:"testCaseFiles" json:"testCaseFiles"` // 单元测试存储文件
+
+	CachePolicy string `yaml:"cachePolicy" json:"cachePolicy"` // 缓存策略
+	CacheOn     bool   `yaml:"cacheOn" json:"cacheOn"`         // 缓存是否打开 TODO
+	cachePolicy *shared.CachePolicy
 
 	pathReg    *regexp.Regexp // 匹配模式
 	pathParams []string
@@ -98,26 +107,30 @@ func (this *API) Validate() error {
 		}
 	}
 
+	// 校验缓存配置
+	if len(this.CachePolicy) > 0 {
+		policy := shared.NewCachePolicyFromFile(this.CachePolicy)
+		if policy != nil {
+			err := policy.Validate()
+			if err != nil {
+				return err
+			}
+			this.cachePolicy = policy
+		}
+	}
+
+	// headers
+	err := this.ValidateHeaders()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // 添加参数
 func (this *API) AddParam(param *APIParam) {
 	this.Params = append(this.Params, param)
-}
-
-// 格式化Header
-func (this *API) FormatHeaders(formatter func(source string) string) []*shared.HeaderConfig {
-	result := []*shared.HeaderConfig{}
-	for _, header := range this.Headers {
-		result = append(result, &shared.HeaderConfig{
-			Name:   header.Name,
-			Value:  formatter(header.Value),
-			Always: header.Always,
-			Status: header.Status,
-		})
-	}
-	return result
 }
 
 // 使用正则匹配路径
@@ -230,7 +243,7 @@ func (this *API) IsWatching() bool {
 
 // 添加测试脚本
 func (this *API) AddScript(script *APIScript) {
-	if lists.Contains(this.TestScripts, script.Filename) {
+	if lists.ContainsString(this.TestScripts, script.Filename) {
 		return
 	}
 	this.TestScripts = append(this.TestScripts, script.Filename)
@@ -257,7 +270,7 @@ func (this *API) FindTestScripts() []*APIScript {
 
 // 查找单个脚本
 func (this *API) FindTestScript(filename string) *APIScript {
-	if !lists.Contains(this.TestScripts, filename) {
+	if !lists.ContainsString(this.TestScripts, filename) {
 		return nil
 	}
 
@@ -279,7 +292,7 @@ func (this *API) FindTestScript(filename string) *APIScript {
 
 // 删除测试脚本
 func (this *API) DeleteTestScript(filename string) error {
-	if lists.Contains(this.TestScripts, filename) {
+	if lists.ContainsString(this.TestScripts, filename) {
 		script := NewAPIScript()
 		script.Filename = filename
 		err := script.Delete()
@@ -311,7 +324,7 @@ func (this *API) AddTestCase(filename string) {
 	if len(filename) == 0 {
 		return
 	}
-	if lists.Contains(this.TestCaseFiles, filename) {
+	if lists.ContainsString(this.TestCaseFiles, filename) {
 		return
 	}
 	this.TestCaseFiles = append(this.TestCaseFiles, filename)
@@ -332,4 +345,51 @@ func (this *API) FindTestCases() []*APITestCase {
 // 删除测试用例
 func (this *API) DeleteTestCase(filename string) {
 	this.TestCaseFiles = lists.Delete(this.TestCaseFiles, filename).([]string)
+}
+
+// 添加Mock文件
+func (this *API) AddMock(filename string) {
+	if len(filename) == 0 {
+		return
+	}
+	if lists.ContainsString(this.MockFiles, filename) {
+		return
+	}
+	this.MockFiles = append(this.MockFiles, filename)
+}
+
+// 获取所有Mock的文件
+func (this *API) MockDataFiles() []string {
+	result := []string{}
+	for _, filename := range this.MockFiles {
+		mock := NewAPIMockFromFile(filename)
+		if mock != nil && len(mock.File) > 0 {
+			result = append(result, mock.File)
+		}
+	}
+	return result
+}
+
+// 删除Mock
+func (this *API) DeleteMock(mockFile string) {
+	this.MockFiles = lists.Delete(this.MockFiles, mockFile).([]string)
+}
+
+// 随机取得一个Mock
+func (this *API) RandMock() *APIMock {
+	if len(this.MockFiles) == 0 {
+		return nil
+	}
+	rand.Seed(time.Now().UnixNano())
+	file := this.MockFiles[rand.Int()%len(this.MockFiles)]
+	if len(file) == 0 {
+		return nil
+	}
+
+	return NewAPIMockFromFile(file)
+}
+
+// 缓存策略
+func (this *API) CachePolicyObject() *shared.CachePolicy {
+	return this.cachePolicy
 }

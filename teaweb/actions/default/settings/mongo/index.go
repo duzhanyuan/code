@@ -1,20 +1,33 @@
 package mongo
 
 import (
+	"github.com/TeaWeb/code/teamongo"
+	"github.com/TeaWeb/code/teaweb/configs"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/actions"
-	"github.com/TeaWeb/code/teaweb/configs"
-	"github.com/TeaWeb/code/teamongo"
 	"github.com/iwind/TeaGo/files"
+	"github.com/iwind/TeaGo/maps"
+	"runtime"
+	"strings"
 )
 
 type IndexAction actions.Action
 
+// MongoDB连接信息
 func (this *IndexAction) Run(params struct{}) {
 	config := configs.SharedMongoConfig()
 
-	this.Data["config"] = config
-	this.Data["uri"] = config.URI()
+	this.Data["config"] = maps.Map{
+		"scheme":                  config.Scheme,
+		"username":                config.Username,
+		"password":                strings.Repeat("*", len(config.Password)),
+		"host":                    config.Host,
+		"port":                    config.Port,
+		"authMechanism":           config.AuthMechanism,
+		"authMechanismProperties": config.AuthMechanismPropertiesString(),
+		"requestURI":              config.RequestURI,
+	}
+	this.Data["uri"] = config.URIMask()
 
 	// 连接状态
 	err := teamongo.Test()
@@ -31,6 +44,9 @@ func (this *IndexAction) Run(params struct{}) {
 	} else {
 		this.Data["isInstalled"] = false
 	}
+
+	// 当前系统
+	this.Data["os"] = runtime.GOOS
 
 	this.Show()
 }

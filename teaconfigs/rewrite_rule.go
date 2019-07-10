@@ -1,9 +1,11 @@
 package teaconfigs
 
 import (
+	"fmt"
 	"github.com/TeaWeb/code/teaconfigs/shared"
+	"github.com/TeaWeb/code/teautils"
 	"github.com/iwind/TeaGo/lists"
-	"github.com/iwind/TeaGo/types"
+	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/utils/string"
 	"regexp"
 	"strings"
@@ -14,6 +16,11 @@ const (
 	RewriteTargetURL   = 2
 )
 
+const (
+	RewriteFlagRedirect = "r" // 跳转，TODO: 实现 302, 305
+	RewriteFlagProxy    = "p" // 代理
+)
+
 // 重写规则定义
 //
 // 参考
@@ -21,16 +28,17 @@ const (
 // - https://httpd.apache.org/docs/current/mod/mod_rewrite.html
 // - https://httpd.apache.org/docs/2.4/rewrite/flags.html
 type RewriteRule struct {
+	shared.HeaderList `yaml:",inline"`
+
 	On bool   `yaml:"on" json:"on"` // 是否开启
 	Id string `yaml:"id" json:"id"` // ID
 
 	// 开启的条件
-	// 语法为：cond testString condPattern 比如：
-	// - cond ${status} 200
-	// - cond ${arg.name} lily
-	// - cond ${requestPath} *.png
-	// @TODO 需要实现
-	Cond []RewriteCond `yaml:"cond" json:"cond"`
+	// 语法为：cond param operator value 比如：
+	// - cond ${status} gte 200
+	// - cond ${arg.name} eq lily
+	// - cond ${requestPath} regexp .*\.png
+	Cond []*RequestCond `yaml:"cond" json:"cond"`
 
 	// 规则
 	// 语法为：pattern regexp 比如：
@@ -39,26 +47,29 @@ type RewriteRule struct {
 	reg     *regexp.Regexp
 
 	// 要替换成的URL
-	// 支持反向引用：${0}, ${1}, ...
+	// 支持反向引用：${0}, ${1}, ...，也支持?P<NAME>语法
 	// - 如果以 proxy:// 开头，表示目标为代理，首先会尝试作为代理ID请求，如果找不到，会尝试作为代理Host请求
 	Replace string `yaml:"replace" json:"replace"`
 
-	// Headers
-	Headers       []*shared.HeaderConfig `yaml:"headers" json:"headers"`             // 自定义Header @TODO
-	IgnoreHeaders []string               `yaml:"ignoreHeaders" json:"ignoreHeaders"` // 忽略的Header @TODO
+	// 选项
+	Flags       []string `yaml:"flags" json:"flags"`
+	FlagOptions maps.Map `yaml:"flagOptions" json:"flagOptions"` // flag => options map
 
 	targetType  int // RewriteTarget*
 	targetURL   string
 	targetProxy string
 }
 
+// 获取新对象
 func NewRewriteRule() *RewriteRule {
 	return &RewriteRule{
-		On: true,
-		Id: stringutil.Rand(16),
+		On:          true,
+		Id:          stringutil.Rand(16),
+		FlagOptions: maps.Map{},
 	}
 }
 
+// 校验
 func (this *RewriteRule) Validate() error {
 	reg, err := regexp.Compile(this.Pattern)
 	if err != nil {
@@ -73,7 +84,7 @@ func (this *RewriteRule) Validate() error {
 		index := strings.Index(url, "/")
 		if index >= 0 {
 			this.targetProxy = url[:index]
-			this.targetURL = url[index:]
+			this.targetURL = url[index+1:]
 		}
 	} else {
 		this.targetType = RewriteTargetURL
@@ -89,121 +100,108 @@ func (this *RewriteRule) Validate() error {
 	}
 
 	// 校验Header
-	for _, header := range this.Headers {
-		err := header.Validate()
-		if err != nil {
-			return err
-		}
+	err = this.ValidateHeaders()
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
 // 对某个请求执行规则
-func (this *RewriteRule) Match(requestPath string, formatter func(source string) string) (string, bool) {
+func (this *RewriteRule) Match(requestPath string, formatter func(source string) string) (replace string, varMapping map[string]string, matched bool) {
 	if this.reg == nil {
-		return "", false
+		return "", nil, false
+	}
+
+	matches := this.reg.FindStringSubmatch(requestPath)
+	if len(matches) == 0 {
+		return "", nil, false
 	}
 
 	// 判断条件
-	for _, cond := range this.Cond {
-		if !cond.Match(formatter) {
-			return "", false
+	if len(this.Cond) > 0 {
+		for _, cond := range this.Cond {
+			if !cond.Match(formatter) {
+				return "", nil, false
+			}
 		}
 	}
 
-	replace := formatter(this.targetURL)
-	matches := this.reg.FindStringSubmatch(requestPath)
-	if len(matches) == 0 {
-		return "", false
-	}
-	replace = regexp.MustCompile("\\${\\d+}").ReplaceAllStringFunc(replace, func(s string) string {
-		index := types.Int(s[2 : len(s)-1])
-		if index < len(matches) {
-			return matches[index]
+	varMapping = map[string]string{}
+	subNames := this.reg.SubexpNames()
+	for index, match := range matches {
+		varMapping[fmt.Sprintf("%d", index)] = match
+		subName := subNames[index]
+		if len(subName) > 0 {
+			varMapping[subName] = match
 		}
-		return ""
+	}
+
+	replace = teautils.ParseVariables(this.targetURL, func(varName string) string {
+		v, ok := varMapping[varName]
+		if ok {
+			return v
+		}
+		return "${" + varName + "}"
 	})
 
-	return replace, true
+	replace = formatter(replace)
+
+	return replace, varMapping, true
 }
 
+// 获取目标类型
 func (this *RewriteRule) TargetType() int {
 	return this.targetType
 }
 
+// 获取目标类型
 func (this *RewriteRule) TargetProxy() string {
 	return this.targetProxy
 }
 
+// 获取目标URL
 func (this *RewriteRule) TargetURL() string {
 	return this.targetURL
 }
 
-// 设置Header
-func (this *RewriteRule) SetHeader(name string, value string) {
-	found := false
-	upperName := strings.ToUpper(name)
-	for _, header := range this.Headers {
-		if strings.ToUpper(header.Name) == upperName {
-			found = true
-			header.Value = value
-		}
-	}
-	if found {
-		return
-	}
-
-	header := shared.NewHeaderConfig()
-	header.Name = name
-	header.Value = value
-	this.Headers = append(this.Headers, header)
+// 判断是否是外部URL
+func (this *RewriteRule) IsExternalURL(url string) bool {
+	return RegexpExternalURL.MatchString(url)
 }
 
-// 删除指定位置上的Header
-func (this *RewriteRule) DeleteHeaderAtIndex(index int) {
-	if index >= 0 && index < len(this.Headers) {
-		this.Headers = lists.Remove(this.Headers, index).([]*shared.HeaderConfig)
+// 添加Flag
+func (this *RewriteRule) AddFlag(flag string, options maps.Map) {
+	this.Flags = append(this.Flags, flag)
+	if options != nil {
+		this.FlagOptions[flag] = options
 	}
 }
 
-// 取得指定位置上的Header
-func (this *RewriteRule) HeaderAtIndex(index int) *shared.HeaderConfig {
-	if index >= 0 && index < len(this.Headers) {
-		return this.Headers[index]
-	}
-	return nil
+// 重置模式
+func (this *RewriteRule) ResetFlags() {
+	this.Flags = []string{}
+	this.FlagOptions = maps.Map{}
 }
 
-// 格式化Header
-func (this *RewriteRule) FormatHeaders(formatter func(source string) string) []*shared.HeaderConfig {
-	result := []*shared.HeaderConfig{}
-	for _, header := range this.Headers {
-		result = append(result, &shared.HeaderConfig{
-			Name:   header.Name,
-			Value:  formatter(header.Value),
-			Always: header.Always,
-			Status: header.Status,
-		})
+// 跳转模式
+func (this *RewriteRule) RedirectMode() string {
+	if lists.ContainsString(this.Flags, RewriteFlagProxy) {
+		return RewriteFlagProxy
 	}
-	return result
+	if lists.ContainsString(this.Flags, RewriteFlagRedirect) {
+		return RewriteFlagRedirect
+	}
+	return RewriteFlagProxy
 }
 
-// 屏蔽一个Header
-func (this *RewriteRule) AddIgnoreHeader(name string) {
-	this.IgnoreHeaders = append(this.IgnoreHeaders, name)
+// 添加过滤条件
+func (this *RewriteRule) AddCond(cond *RequestCond) {
+	this.Cond = append(this.Cond, cond)
 }
 
-// 移除对Header的屏蔽
-func (this *RewriteRule) DeleteIgnoreHeaderAtIndex(index int) {
-	if index >= 0 && index < len(this.IgnoreHeaders) {
-		this.IgnoreHeaders = lists.Remove(this.IgnoreHeaders, index).([]string)
-	}
-}
-
-// 更改Header的屏蔽
-func (this *RewriteRule) UpdateIgnoreHeaderAtIndex(index int, name string) {
-	if index >= 0 && index < len(this.IgnoreHeaders) {
-		this.IgnoreHeaders[index] = name
-	}
+// 是否在引用某个代理
+func (this *RewriteRule) RefersProxy(proxyId string) bool {
+	return strings.HasPrefix(this.Replace, "proxy://"+proxyId)
 }
